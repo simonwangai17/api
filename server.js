@@ -43,19 +43,14 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
     const timestamp = new Date().toISOString().replace(/[-T:.Z]/g, '').slice(0, 14);
     const password = Buffer.from(`${process.env.MPESA_SHORTCODE}${process.env.MPESA_PASSKEY}${timestamp}`).toString('base64');
 
-    // DETECT IF YOU ARE USING A TILL OR PAYBILL
-    // If your shortcode is 4566747 (Buy Goods), use CustomerBuyGoodsOnline.
-    // If it's a Paybill, use CustomerPayBillOnline.
-    const transactionType = 'CustomerBuyGoodsOnline'; 
-
     const payload = {
-      BusinessShortCode: process.env.MPESA_SHORTCODE,
+      BusinessShortCode: process.env.MPESA_SHORTCODE, // This must be the Till Number (8189020)
       Password: password,
       Timestamp: timestamp,
-      TransactionType: transactionType,
+      TransactionType: 'CustomerBuyGoodsOnline', // Must be this for Tills
       Amount: Math.round(amount),
       PartyA: formattedPhone,
-      PartyB: process.env.MPESA_SHORTCODE,
+      PartyB: process.env.MPESA_SHORTCODE, // This must also be the Till Number
       PhoneNumber: formattedPhone,
       CallBackURL: process.env.MPESA_CALLBACK_URL,
       AccountReference: 'DataStore',
