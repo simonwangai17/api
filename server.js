@@ -17,32 +17,16 @@ const transactions = {};
 
 app.get('/', (req, res) => res.json({ status: 'Backend running' }));
 
-// ===== BALANCE ENDPOINT =====
 app.get('/api/balance/:phone', async (req, res) => {
   try {
     const { phone } = req.params;
-    
-    // Query Supabase for this phone number's orders
-    const { data, error } = await supabase
-      .from('orders')
-      .select('price')
-      .eq('recipient_phone', phone);
-
+    const { data, error } = await supabase.from('orders').select('price').eq('recipient_phone', phone);
     if (error) throw error;
+    if (!data || data.length === 0) return res.status(404).json({ success: false, error: 'No active package found for this number.' });
 
-    if (!data || data.length === 0) {
-      return res.status(404).json({ success: false, error: 'No active package found for this number. Please buy a package first.' });
-    }
-
-    // Calculate a mock balance based on their total spend
     const totalSpent = data.reduce((sum, order) => sum + Number(order.price), 0);
-    const mockData = (totalSpent / 25).toFixed(1) + ' GB';
-    const mockSms = Math.floor(totalSpent / 2) + ' SMS';
-    const mockAirtime = 'KES ' + (totalSpent * 0.05).toFixed(2);
-
-    res.json({ success: true, balance: { data: mockData, sms: mockSms, airtime: mockAirtime } });
+    res.json({ success: true, balance: { data: (totalSpent / 25).toFixed(1) + ' GB', sms: Math.floor(totalSpent / 2) + ' SMS', airtime: 'KES ' + (totalSpent * 0.05).toFixed(2) } });
   } catch (err) {
-    console.error('Balance Error:', err);
     res.status(500).json({ success: false, error: 'Failed to fetch balance.' });
   }
 });
@@ -55,11 +39,14 @@ async function getAccessToken() {
 
 app.post('/api/mpesa/stkpush', async (req, res) => {
   try {
-    const { phone, amount, bundleName, network } = req.body;
+    const { recipientPhone, mpesaPhone, amount, bundleName, network } = req.body;
+    
+    if (!recipientPhone || !mpesaPhone) return res.status(400).json({ success: false, error: 'Missing phone numbers' });
+
     const token = await getAccessToken();
     
-    let formattedPhone = phone.replace(/\D/g, '');
-    if (formattedPhone.startsWith('0')) formattedPhone = '254' + formattedPhone.slice(1);
+    let formattedPayerPhone = mpesaPhone.replace(/\D/g, '');
+    if (formattedPayerPhone.startsWith('0')) formattedPayerPhone = '254' + formattedPayerPhone.slice(1);
 
     const timestamp = new Date().toISOString().replace(/[-T:.Z]/g, '').slice(0, 14);
     const password = Buffer.from(`${process.env.MPESA_SHORTCODE}${process.env.MPESA_PASSKEY}${timestamp}`).toString('base64');
@@ -70,9 +57,9 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
       Timestamp: timestamp,
       TransactionType: 'CustomerBuyGoodsOnline',
       Amount: Math.round(amount),
-      PartyA: formattedPhone,
+      PartyA: formattedPayerPhone,
       PartyB: '8189020', 
-      PhoneNumber: formattedPhone,
+      PhoneNumber: formattedPayerPhone,
       CallBackURL: process.env.MPESA_CALLBACK_URL,
       AccountReference: 'DataStore',
       TransactionDesc: bundleName ? bundleName.substring(0, 13) : 'Data Bundle'
@@ -81,7 +68,12 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
     const response = await axios.post(`${MPESA_BASE_URL}/mpesa/stkpush/v1/processrequest`, payload, { headers: { Authorization: `Bearer ${token}` } });
 
     transactions[response.data.CheckoutRequestID] = { 
-      status: 'pending', phone: formattedPhone, amount: Math.round(amount), bundleName, network
+      status: 'pending', 
+      recipientPhone: recipientPhone, 
+      mpesaPhone: formattedPayerPhone, 
+      amount: Math.round(amount), 
+      bundleName: bundleName, 
+      network: network
     };
     
     res.json({ success: true, checkoutId: response.data.CheckoutRequestID });
@@ -99,17 +91,22 @@ app.post('/api/mpesa/callback', async (req, res) => {
   if (ResultCode === 0) {
     const receipt = CallbackMetadata?.Item?.find(item => item.Name === 'MpesaReceiptNumber')?.Value;
     const amountPaid = CallbackMetadata?.Item?.find(item => item.Name === 'Amount')?.Value;
-    const phonePaid = CallbackMetadata?.Item?.find(item => item.Name === 'PhoneNumber')?.Value;
+    
     const txDetails = transactions[CheckoutRequestID] || {};
+    
+    const finalRecipient = txDetails.recipientPhone || 'Unknown';
+    const finalBundle = txDetails.bundleName || 'Unknown';
+    const finalNetwork = txDetails.network || 'safaricom';
+    const finalMpesa = txDetails.mpesaPhone || 'Unknown';
 
     transactions[CheckoutRequestID] = { status: 'success', receipt };
 
-    console.log(`💾 Saving order to Supabase...`);
+    console.log(`💾 Saving: ${finalBundle} (${finalNetwork}) to ${finalRecipient} via ${finalMpesa}`);
     const { error } = await supabase.from('orders').insert({
-      bundle_name: txDetails.bundleName || 'Unknown',
-      network: txDetails.network || 'safaricom',
-      recipient_phone: txDetails.phone || phonePaid.toString(),
-      mpesa_phone: phonePaid.toString(),
+      bundle_name: finalBundle,
+      network: finalNetwork,
+      recipient_phone: finalRecipient,
+      mpesa_phone: finalMpesa,
       receipt: receipt,
       price: amountPaid
     });
@@ -118,7 +115,6 @@ app.post('/api/mpesa/callback', async (req, res) => {
     else console.log(`✅ Order saved: ${receipt}`);
   } else {
     transactions[CheckoutRequestID] = { status: 'failed', reason: ResultDesc };
-    console.log(`❌ Failed: ${ResultDesc}`);
   }
   
   res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
