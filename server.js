@@ -44,13 +44,13 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
     const password = Buffer.from(`${process.env.MPESA_SHORTCODE}${process.env.MPESA_PASSKEY}${timestamp}`).toString('base64');
 
     const payload = {
-      BusinessShortCode: process.env.MPESA_SHORTCODE, // This must be the Till Number (8189020)
+      BusinessShortCode: process.env.MPESA_SHORTCODE, // HO Number (4566747)
       Password: password,
       Timestamp: timestamp,
-      TransactionType: 'CustomerBuyGoodsOnline', // Must be this for Tills
+      TransactionType: 'CustomerBuyGoodsOnline',
       Amount: Math.round(amount),
       PartyA: formattedPhone,
-      PartyB: process.env.MPESA_SHORTCODE, // This must also be the Till Number
+      PartyB: '8189020', // TILL NUMBER HERE
       PhoneNumber: formattedPhone,
       CallBackURL: process.env.MPESA_CALLBACK_URL,
       AccountReference: 'DataStore',
