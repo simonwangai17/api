@@ -2,7 +2,6 @@ const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
 
-
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -44,11 +43,16 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
     const timestamp = new Date().toISOString().replace(/[-T:.Z]/g, '').slice(0, 14);
     const password = Buffer.from(`${process.env.MPESA_SHORTCODE}${process.env.MPESA_PASSKEY}${timestamp}`).toString('base64');
 
+    // DETECT IF YOU ARE USING A TILL OR PAYBILL
+    // If your shortcode is 4566747 (Buy Goods), use CustomerBuyGoodsOnline.
+    // If it's a Paybill, use CustomerPayBillOnline.
+    const transactionType = 'CustomerBuyGoodsOnline'; 
+
     const payload = {
       BusinessShortCode: process.env.MPESA_SHORTCODE,
       Password: password,
       Timestamp: timestamp,
-      TransactionType: 'CustomerPayBillOnline',
+      TransactionType: transactionType,
       Amount: Math.round(amount),
       PartyA: formattedPhone,
       PartyB: process.env.MPESA_SHORTCODE,
