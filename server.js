@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(cors());
@@ -8,10 +9,17 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
 
+// Environment detection
 const isProduction = process.env.NODE_ENV === 'production';
 const MPESA_BASE_URL = isProduction 
   ? 'https://api.safaricom.co.ke' 
   : 'https://sandbox.safaricom.co.ke';
+
+// Initialize Supabase (Make sure to add these to Render Environment Variables!)
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
 
 console.log(`⚙️  Running in ${isProduction ? 'PRODUCTION' : 'SANDBOX'} mode`);
 
@@ -50,7 +58,7 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
       TransactionType: 'CustomerBuyGoodsOnline',
       Amount: Math.round(amount),
       PartyA: formattedPhone,
-      PartyB: '8189020', // TILL NUMBER HERE
+      PartyB: '8189020', // Store/Till Number
       PhoneNumber: formattedPhone,
       CallBackURL: process.env.MPESA_CALLBACK_URL,
       AccountReference: 'DataStore',
@@ -63,7 +71,13 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
       { headers: { Authorization: `Bearer ${token}` } }
     );
 
-    transactions[response.data.CheckoutRequestID] = { status: 'pending' };
+    // Save the pending transaction with the phone number and amount
+    transactions[response.data.CheckoutRequestID] = { 
+      status: 'pending', 
+      phone: formattedPhone, 
+      amount: Math.round(amount) 
+    };
+    
     res.json({ success: true, checkoutId: response.data.CheckoutRequestID });
     
   } catch (error) {
@@ -72,18 +86,46 @@ app.post('/api/mpesa/stkpush', async (req, res) => {
   }
 });
 
-app.post('/api/mpesa/callback', (req, res) => {
+app.post('/api/mpesa/callback', async (req, res) => {
   const callbackData = req.body.Body?.stkCallback;
   if (!callbackData) return res.status(400).send('Invalid');
+  
   const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = callbackData;
+
   if (ResultCode === 0) {
+    // Extract details
     const receipt = CallbackMetadata?.Item?.find(item => item.Name === 'MpesaReceiptNumber')?.Value || 'N/A';
+    const amountPaid = CallbackMetadata?.Item?.find(item => item.Name === 'Amount')?.Value || 0;
+    const phoneNumber = CallbackMetadata?.Item?.find(item => item.Name === 'PhoneNumber')?.Value || '';
+
+    // Update local memory
     transactions[CheckoutRequestID] = { status: 'success', receipt };
-    console.log(`✅ Success: ${receipt}`);
+
+    // SAVE TO SUPABASE
+    console.log(`💾 Saving order to Supabase...`);
+    const { data, error } = await supabase
+      .from('orders')
+      .insert({
+        bundle_name: 'Bundle Purchase', // You can send this from frontend if needed
+        network: 'safaricom',
+        recipient_phone: phoneNumber.toString(),
+        mpesa_phone: phoneNumber.toString(),
+        receipt: receipt,
+        price: amountPaid
+      });
+
+    if (error) {
+      console.error('❌ SUPABASE ERROR:', error);
+    } else {
+      console.log(`✅ Order saved to Supabase: ${receipt}`);
+    }
+
+    console.log(`✅ Success Callback Received: ${receipt}`);
   } else {
     transactions[CheckoutRequestID] = { status: 'failed', reason: ResultDesc };
     console.log(`❌ Failed: ${ResultDesc}`);
   }
+  
   res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
 });
 
